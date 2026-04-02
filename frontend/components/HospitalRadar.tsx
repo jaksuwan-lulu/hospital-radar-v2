@@ -1,8 +1,8 @@
 'use client';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Hospital, UserLocation, FilterType, FilterStatus, AuthUser } from '../types/hospital';
 import { formatDistance } from '../lib/utils';
-import { fetchHospitals, getFavorites, toggleFavoriteAPI, logout, getAccessToken } from '../lib/api';
+import { fetchHospitals, getFavorites, toggleFavoriteAPI, logout } from '../lib/api';
 import LocationPermissionPopup from './LocationPermissionPopup';
 import HospitalDetail from './HospitalDetail';
 import HospitalList from './HospitalList';
@@ -26,18 +26,18 @@ export default function HospitalRadar({ user, onLogout }: Props) {
   const circleRef          = useRef<any>(null);
   const hospitalMarkersRef = useRef<Map<string, any>>(new Map());
 
-  const [userLocation, setUserLocation]     = useState<UserLocation | null>(null);
-  const [hospitals, setHospitals]           = useState<Hospital[]>([]);
-  const [filteredHospitals, setFiltered]    = useState<Hospital[]>([]);
-  const [selectedHospital, setSelected]     = useState<Hospital | null>(null);
-  const [showLocationPopup, setShowPopup]   = useState(true);
-  const [favorites, setFavorites]           = useState<Set<string>>(new Set());
-  const [filterType, setFilterType]         = useState<FilterType>('all');
-  const [filterStatus, setFilterStatus]     = useState<FilterStatus>('all');
-  const [showList, setShowList]             = useState(false);
-  const [mapReady, setMapReady]             = useState(false);
-  const [loading, setLoading]               = useState(false);
-  const [error, setError]                   = useState<string | null>(null);
+  const [userLocation, setUserLocation]   = useState<UserLocation | null>(null);
+  const [hospitals, setHospitals]         = useState<Hospital[]>([]);
+  const [filteredHospitals, setFiltered]  = useState<Hospital[]>([]);
+  const [selectedHospital, setSelected]   = useState<Hospital | null>(null);
+  const [showLocationPopup, setShowPopup] = useState(true);
+  const [favorites, setFavorites]         = useState<Set<string>>(new Set());
+  const [filterType, setFilterType]       = useState<FilterType>('all');
+  const [filterStatus, setFilterStatus]   = useState<FilterStatus>('all');
+  const [showList, setShowList]           = useState(false);
+  const [mapReady, setMapReady]           = useState(false);
+  const [loading, setLoading]             = useState(false);
+  const [error, setError]                 = useState<string | null>(null);
 
   // ── Load Leaflet ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -51,7 +51,7 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     };
   }, []);
 
-  // ── Load favorites when user logs in ───────────────────────────────────────
+  // ── Load favorites เมื่อ login ─────────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
     getFavorites().then(ids => setFavorites(new Set(ids)));
@@ -60,160 +60,98 @@ export default function HospitalRadar({ user, onLogout }: Props) {
   const initMap = (L: any) => {
     if (!mapContainerRef.current || mapRef.current) return;
     leafletRef.current = L;
-
     const map = L.map(mapContainerRef.current, {
-      center:           [13.7563, 100.5018],
-      zoom:             13,
-      zoomControl:      false,
-      attributionControl: true,
+      center: [13.7563, 100.5018], zoom: 13,
+      zoomControl: false, attributionControl: true,
     });
-
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap &copy; CartoDB',
-      maxZoom:     19,
+      attribution: '&copy; OpenStreetMap &copy; CartoDB', maxZoom: 19,
     }).addTo(map);
-
     mapRef.current = map;
     setMapReady(true);
   };
 
-  // ── Fetch hospitals from API once we have location ─────────────────────────
   const loadHospitals = useCallback(async (loc: UserLocation, L: any) => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const data = await fetchHospitals(loc.lat, loc.lng, RADIUS_METERS, filterType, filterStatus);
       setHospitals(data);
       drawMarkers(data, loc, L);
-    } catch (e) {
+    } catch {
       setError('ไม่สามารถดึงข้อมูลโรงพยาบาลได้ กรุณาลองใหม่');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [filterType, filterStatus]);
 
-  // ── When user location set → place pin, circle, fetch hospitals ────────────
   useEffect(() => {
     if (!userLocation || !mapReady) return;
-    const L   = leafletRef.current;
-    const map = mapRef.current;
+    const L = leafletRef.current; const map = mapRef.current;
     if (!L || !map) return;
-
-    // User marker
     if (userMarkerRef.current) { try { map.removeLayer(userMarkerRef.current); } catch (_) {} }
     if (circleRef.current)     { try { map.removeLayer(circleRef.current);     } catch (_) {} }
-
     const userIcon = L.divIcon({
       className: '',
-      html: `<div style="
-        width:18px;height:18px;
-        background:#00e5ff;border:3px solid white;border-radius:50%;
-        box-shadow:0 0 12px #00e5ffaa,0 0 24px #00e5ff44;
-      "></div>`,
+      html: `<div style="width:18px;height:18px;background:#00e5ff;border:3px solid white;border-radius:50%;box-shadow:0 0 12px #00e5ffaa,0 0 24px #00e5ff44;"></div>`,
       iconSize: [18, 18], iconAnchor: [9, 9],
     });
-
     userMarkerRef.current = L.marker([userLocation.lat, userLocation.lng], { icon: userIcon })
       .addTo(map)
-      .bindTooltip(
-        '<span style="font-family:Sarabun;font-size:12px;color:white;background:#161b22;border:1px solid rgba(0,229,255,0.3);padding:4px 8px;border-radius:8px;">📍 คุณอยู่ที่นี่</span>',
-        { className: 'custom-tooltip', permanent: false, direction: 'top' }
-      );
-
+      .bindTooltip('<span style="font-family:Sarabun;font-size:12px;color:white;background:#161b22;border:1px solid rgba(0,229,255,0.3);padding:4px 8px;border-radius:8px;">📍 คุณอยู่ที่นี่</span>',
+        { className: 'custom-tooltip', permanent: false, direction: 'top' });
     circleRef.current = L.circle([userLocation.lat, userLocation.lng], {
-      radius:      RADIUS_METERS,
-      color:       '#ff8c00',
-      weight:      1.5,
-      opacity:     0.6,
-      fillColor:   '#ff8c00',
-      fillOpacity: 0.06,
-      dashArray:   '6,4',
+      radius: RADIUS_METERS, color: '#ff8c00', weight: 1.5, opacity: 0.6,
+      fillColor: '#ff8c00', fillOpacity: 0.06, dashArray: '6,4',
     }).addTo(map);
-
     map.setView([userLocation.lat, userLocation.lng], 13, { animate: true });
-
     loadHospitals(userLocation, L);
   }, [userLocation, mapReady]);
 
-  // ── Re-fetch when filter changes (with location) ───────────────────────────
   useEffect(() => {
     if (!userLocation || !mapReady) return;
-    const L = leafletRef.current;
-    if (!L) return;
+    const L = leafletRef.current; if (!L) return;
     loadHospitals(userLocation, L);
   }, [filterType, filterStatus]);
 
-  // ── Draw hospital markers ──────────────────────────────────────────────────
   const drawMarkers = (list: Hospital[], userLoc: UserLocation, L: any) => {
-    const map = mapRef.current;
-    if (!map || !L) return;
-
+    const map = mapRef.current; if (!map || !L) return;
     hospitalMarkersRef.current.forEach(m => { try { map.removeLayer(m); } catch (_) {} });
     hospitalMarkersRef.current.clear();
-
     list.forEach(h => {
-      const isOpen   = h.status === 'open';
-      const isGov    = h.type === 'government';
-      const dotColor = isOpen ? '#00ff88' : h.status === 'unknown' ? '#ffd32a' : '#ff4757';
+      const isOpen    = h.status === 'open';
+      const isGov     = h.type === 'government';
+      const dotColor  = isOpen ? '#00ff88' : h.status === 'unknown' ? '#ffd32a' : '#ff4757';
       const dotBorder = isGov ? '#0099ff' : '#ffd32a';
-
       const icon = L.divIcon({
         className: 'hospital-marker-icon',
-        html: `
-          <div style="position:relative;width:28px;height:28px;">
-            <div style="
-              width:14px;height:14px;background:${dotColor};
-              border:2px solid ${dotBorder};border-radius:50%;
-              position:absolute;top:50%;left:50%;
-              transform:translate(-50%,-50%);
-              box-shadow:0 0 8px ${dotColor}99;
-            "></div>
-          </div>`,
+        html: `<div style="position:relative;width:28px;height:28px;"><div style="width:14px;height:14px;background:${dotColor};border:2px solid ${dotBorder};border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);box-shadow:0 0 8px ${dotColor}99;"></div></div>`,
         iconSize: [28, 28], iconAnchor: [14, 14],
       });
-
-      const typeBadge   = isGov
-        ? `<span style="color:#60a5fa;font-size:10px;">🏛 รัฐบาล</span>`
-        : `<span style="color:#f59e0b;font-size:10px;">🏥 เอกชน</span>`;
+      const typeBadge   = isGov ? `<span style="color:#60a5fa;font-size:10px;">🏛 รัฐบาล</span>` : `<span style="color:#f59e0b;font-size:10px;">🏥 เอกชน</span>`;
       const statusLabel = isOpen ? 'เปิด' : h.status === 'unknown' ? 'ไม่ทราบ' : 'ปิด';
       const statusColor = isOpen ? '#00ff88' : h.status === 'unknown' ? '#ffd32a' : '#ff4757';
-      const distTxt     = h.distance !== undefined
-        ? `<br/><span style="color:#00e5ff;font-size:11px;">${formatDistance(h.distance)}</span>` : '';
-
+      const distTxt     = h.distance !== undefined ? `<br/><span style="color:#00e5ff;font-size:11px;">${formatDistance(h.distance)}</span>` : '';
       const marker = L.marker([h.lat, h.lng], { icon }).addTo(map);
-      marker.bindTooltip(`
-        <div style="background:#161b22;border:1px solid rgba(255,255,255,0.15);border-radius:10px;padding:8px 10px;min-width:160px;font-family:'Sarabun',sans-serif;">
-          <div style="font-weight:600;font-size:13px;color:white;margin-bottom:4px;">${h.name_th}</div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            ${typeBadge}
-            <span style="color:${statusColor};font-size:10px;">● ${statusLabel}</span>
-          </div>
-          ${distTxt}
-        </div>`, {
-        className: 'custom-tooltip', direction: 'top', offset: [0, -8], opacity: 1,
-      });
-
-      const el = marker.getElement();
-      if (el) {
-        el.style.cursor = 'default';
-        el.addEventListener('mouseenter', () => { el.style.cursor = 'pointer'; });
-        el.addEventListener('mouseleave', () => { el.style.cursor = 'default'; });
-      }
+      marker.bindTooltip(`<div style="background:#161b22;border:1px solid rgba(255,255,255,0.15);border-radius:10px;padding:8px 10px;min-width:160px;font-family:'Sarabun',sans-serif;"><div style="font-weight:600;font-size:13px;color:white;margin-bottom:4px;">${h.name_th}</div><div style="display:flex;gap:8px;align-items:center;">${typeBadge}<span style="color:${statusColor};font-size:10px;">● ${statusLabel}</span></div>${distTxt}</div>`,
+        { className: 'custom-tooltip', direction: 'top', offset: [0, -8], opacity: 1 });
       marker.on('click', () => setSelected(h));
       hospitalMarkersRef.current.set(h.id, marker);
     });
   };
 
-  // ── Filter hospitals client-side ───────────────────────────────────────────
+  // ── Filter + เรียงให้ favorites ขึ้นก่อน ──────────────────────────────────
   useEffect(() => {
     let result = [...hospitals];
     if (filterType   !== 'all') result = result.filter(h => h.type   === filterType);
     if (filterStatus !== 'all') result = result.filter(h => h.status === filterStatus);
-    result.sort((a, b) => (a.distance ?? 99999) - (b.distance ?? 99999));
+    // favorites ขึ้นก่อน, ที่เหลือเรียงตามระยะทาง
+    result.sort((a, b) => {
+      const aFav = favorites.has(a.id) ? 0 : 1;
+      const bFav = favorites.has(b.id) ? 0 : 1;
+      if (aFav !== bFav) return aFav - bFav;
+      return (a.distance ?? 99999) - (b.distance ?? 99999);
+    });
     setFiltered(result);
-  }, [hospitals, filterType, filterStatus]);
+  }, [hospitals, filterType, filterStatus, favorites]);
 
-  // ── Marker visibility based on filter ─────────────────────────────────────
   useEffect(() => {
     if (!mapReady) return;
     const visible = new Set(filteredHospitals.map(h => h.id));
@@ -223,35 +161,38 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     });
   }, [filteredHospitals, mapReady]);
 
-  // ── Geolocation ────────────────────────────────────────────────────────────
   const handleAllowLocation = useCallback(() => {
     setShowPopup(false);
-    if (!navigator.geolocation) {
-      setUserLocation({ lat: 13.7563, lng: 100.5018 });
-      return;
-    }
+    if (!navigator.geolocation) { setUserLocation({ lat: 13.7563, lng: 100.5018 }); return; }
     navigator.geolocation.getCurrentPosition(
       pos => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      err => {
-        console.warn('[GPS]', err.message);
-        setUserLocation({ lat: 13.7563, lng: 100.5018 });
-      },
+      err => { console.warn('[GPS]', err.message); setUserLocation({ lat: 13.7563, lng: 100.5018 }); },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   }, []);
 
-  // ── Favorites (syncs to API if logged in, local otherwise) ────────────────
+  // ── Toggle favorite ────────────────────────────────────────────────────────
+  // ถ้า login → sync API, ถ้าไม่ login → แค่ highlight ชั่วคราว (ไม่บันทึก)
   const handleToggleFavorite = useCallback(async (id: string) => {
-    if (user) {
-      try {
-        await toggleFavoriteAPI(id);
-        setFavorites(prev => {
-          const next = new Set(prev);
-          next.has(id) ? next.delete(id) : next.add(id);
-          return next;
-        });
-      } catch (_) {}
-    } else {
+    if (!user) {
+      // ไม่ login: highlight ชั่วคราวเท่านั้น ไม่ต้องทำอะไร persist
+      setFavorites(prev => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+      });
+      return;
+    }
+    // login: optimistic update ก่อน แล้วค่อย sync API
+    setFavorites(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+    try {
+      await toggleFavoriteAPI(id);
+    } catch {
+      // rollback ถ้า API ล้มเหลว
       setFavorites(prev => {
         const next = new Set(prev);
         next.has(id) ? next.delete(id) : next.add(id);
@@ -270,7 +211,6 @@ export default function HospitalRadar({ user, onLogout }: Props) {
         .custom-tooltip { background:transparent!important;border:none!important;box-shadow:none!important;padding:0!important; }
         .custom-tooltip::before { display:none!important; }
         .leaflet-tooltip { background:transparent;border:none;box-shadow:none;padding:0; }
-        @keyframes radar-pulse { 0%{transform:scale(0.5);opacity:1} 100%{transform:scale(1.5);opacity:0} }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .animate-blink { animation:blink 2s ease-in-out infinite; }
       `}</style>
@@ -290,7 +230,6 @@ export default function HospitalRadar({ user, onLogout }: Props) {
             </p>
           </div>
         </div>
-
         <div className="pointer-events-auto flex items-center gap-2">
           {userLocation && (
             <button
@@ -300,7 +239,7 @@ export default function HospitalRadar({ user, onLogout }: Props) {
               <Locate size={16} />
             </button>
           )}
-          {user ? (
+          {user && (
             <div className="flex items-center gap-2 bg-[#161b22]/90 backdrop-blur border border-white/10 rounded-xl px-3 py-2">
               {user.picture
                 ? <img src={user.picture} className="w-6 h-6 rounded-full" alt="" />
@@ -310,57 +249,48 @@ export default function HospitalRadar({ user, onLogout }: Props) {
                 <LogOut size={13} />
               </button>
             </div>
-          ) : null}
+          )}
         </div>
       </div>
 
-      {/* Location popup */}
       {showLocationPopup && (
-        <LocationPermissionPopup
-          onAllow={handleAllowLocation}
-          onDeny={() => setShowPopup(false)}
-        />
+        <LocationPermissionPopup onAllow={handleAllowLocation} onDeny={() => setShowPopup(false)} />
       )}
 
-      {/* Filters */}
       <FilterPanel
-        filterType={filterType}
-        filterStatus={filterStatus}
-        onTypeChange={setFilterType}
-        onStatusChange={setFilterStatus}
+        filterType={filterType} filterStatus={filterStatus}
+        onTypeChange={setFilterType} onStatusChange={setFilterStatus}
         count={filteredHospitals.length}
       />
 
-      {/* Error banner */}
       {error && (
         <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[800] bg-[#ff4757]/20 border border-[#ff4757]/40 text-[#ff4757] text-sm px-4 py-2 rounded-xl backdrop-blur">
           {error}
         </div>
       )}
 
-      {/* Hospital list */}
-      {!selectedHospital && (
-        <HospitalList
-          hospitals={filteredHospitals}
-          onSelect={h => { setSelected(h); setShowList(false); }}
-          favorites={favorites}
-          onFavorite={handleToggleFavorite}
-          isOpen={showList}
-          onToggle={() => setShowList(p => !p)}
-        />
-      )}
+      {/* HospitalList — แสดงเสมอ (ไม่ซ่อนเมื่อเลือก hospital) */}
+      <HospitalList
+        hospitals={filteredHospitals}
+        onSelect={h => { setSelected(h); setShowList(false); }}
+        favorites={favorites}
+        onFavorite={handleToggleFavorite}
+        isOpen={showList}
+        onToggle={() => setShowList(p => !p)}
+        isLoggedIn={!!user}
+      />
 
-      {/* Hospital detail */}
+      {/* HospitalDetail ทับบน HospitalList ด้วย z-index ที่สูงกว่า */}
       {selectedHospital && (
         <HospitalDetail
           hospital={selectedHospital}
           onClose={() => setSelected(null)}
           onFavorite={handleToggleFavorite}
           favorites={favorites}
+          isLoggedIn={!!user}
         />
       )}
 
-      {/* No location hint */}
       {!userLocation && !showLocationPopup && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[800] bg-[#161b22]/90 backdrop-blur border border-white/10 rounded-2xl px-4 py-3 flex items-center gap-3">
           <div className="w-2 h-2 rounded-full bg-[#ff9f43] animate-blink" />
