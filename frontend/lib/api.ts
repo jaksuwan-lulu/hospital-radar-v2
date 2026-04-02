@@ -2,10 +2,21 @@ import type { Hospital, AuthUser } from '../types/hospital';
 
 const API = process.env.NEXT_PUBLIC_API_URL!;
 
-// access token stored in memory only (not localStorage)
+// access token stored in sessionStorage (safer than localStorage, clears on tab close)
 let accessToken: string | null = null;
 
-export function setAccessToken(t: string | null) { accessToken = t; }
+// restore on module load
+if (typeof window !== 'undefined') {
+  accessToken = sessionStorage.getItem('access_token');
+}
+
+export function setAccessToken(t: string | null) {
+  accessToken = t;
+  if (typeof window !== 'undefined') {
+    if (t) sessionStorage.setItem('access_token', t);
+    else   sessionStorage.removeItem('access_token');
+  }
+}
 export function getAccessToken() { return accessToken; }
 
 // ── Generic fetch with auto-refresh ──────────────────────────────────────────
@@ -26,7 +37,7 @@ async function apiFetch(path: string, opts: RequestInit = {}): Promise<Response>
     });
     if (refreshed.ok) {
       const data = await refreshed.json();
-      accessToken = data.access_token;
+      setAccessToken(data.access_token);
       headers['Authorization'] = `Bearer ${accessToken}`;
       res = await fetch(`${API}${path}`, { ...opts, headers, credentials: 'include' });
     } else {
@@ -60,7 +71,7 @@ export async function loginWithLine(code: string, redirectUri: string) {
   });
   if (!res.ok) throw new Error('LINE login failed');
   const data = await res.json();
-  accessToken = data.access_token;
+  setAccessToken(data.access_token);
   return data.user as AuthUser;
 }
 

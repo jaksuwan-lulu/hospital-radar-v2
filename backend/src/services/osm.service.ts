@@ -4,6 +4,43 @@ import { Hospital } from '../types';
 let cache: { data: Hospital[]; ts: number; lat: number; lng: number } | null = null;
 const CACHE_TTL = 60 * 60 * 1000;
 
+// ── Smart status guess when no opening_hours ─────────────────────────────────
+// รพ.เอกชนใหญ่ / ER / 24hr → open
+// รพ.รัฐ → จ-ศ 08:00-20:00 (ส่วนใหญ่ OPD ถึง 16 แต่ รพ.ใหญ่มักถึง 20)
+// คลินิก / ศูนย์ → จ-ศ 08:00-17:00
+export function guessStatusFromName(
+  name: string,
+  nameTh: string,
+  isGov: boolean,
+  emergency: boolean,
+): 'open' | 'closed' | 'unknown' {
+  const combined = (name + nameTh).toLowerCase();
+
+  // 24hr keywords → always open
+  const is24h = /(?:24|ยันฮี|bumrungrad|samitivej|สมิติเวช|บำรุงราษฎร์|เวชธานี|mission|มิชชั่น|พระราม\s*9|เปาโล|นครธน|bangkok\s*hospital|โรงพยาบาลกรุงเทพ)/i
+    .test(combined);
+  if (is24h || emergency) {
+    // ER / 24h hospitals → open always
+    return 'open';
+  }
+
+  const now     = new Date();
+  const bkk     = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+  const day     = bkk.getDay(); // 0=Sun
+  const mins    = bkk.getHours() * 60 + bkk.getMinutes();
+
+  if (isGov) {
+    // รพ.รัฐ: จ-ศ (1-5) 07:30-20:00, ส (6) 07:30-12:00
+    if (day >= 1 && day <= 5 && mins >= 450 && mins < 1200) return 'open';  // 07:30-20:00
+    if (day === 6 && mins >= 450 && mins < 720)              return 'open';  // 07:30-12:00
+    return 'closed';
+  }
+
+  // รพ.เอกชนทั่วไป: จ-ส (1-6) 08:00-20:00
+  if (day >= 1 && day <= 6 && mins >= 480 && mins < 1200) return 'open';
+  return 'closed';
+}
+
 // ── Parse opening_hours → open | closed | unknown ─────────────────────────────
 export function parseOpeningHours(oh: string | undefined): 'open' | 'closed' | 'unknown' {
   if (!oh) return 'unknown';
@@ -89,7 +126,9 @@ async function fetchViaNominatim(lat: number, lng: number, radiusM: number): Pro
       name:          nameEn,
       name_th:       nameTh,
       type:          isGov ? 'government' : 'private',
-      status:        parseOpeningHours(tags.opening_hours),
+      status:        tags.opening_hours
+        ? parseOpeningHours(tags.opening_hours)
+        : guessStatusFromName(nameEn, nameTh, isGov, tags.emergency === 'yes'),
       lat:           parseFloat(item.lat),
       lng:           parseFloat(item.lon),
       address:       item.display_name?.split(',').slice(0, 3).join(',') ?? '',
@@ -130,6 +169,8 @@ export function refreshStatuses(): void {
   if (!cache) return;
   cache.data = cache.data.map(h => ({
     ...h,
-    status: parseOpeningHours(h.opening_hours),
+    status: h.opening_hours
+      ? parseOpeningHours(h.opening_hours)
+      : guessStatusFromName(h.name, h.name_th, h.type === 'government', h.emergency),
   }));
 }
