@@ -1,6 +1,10 @@
 import { Hospital } from '../types';
 
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_URLS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+];
 
 // Cache hospitals 24h to avoid hammering Overpass API
 let cache: { data: Hospital[]; ts: number } | null = null;
@@ -9,11 +13,13 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 // ── Overpass query ────────────────────────────────────────────────────────────
 // ดึง node/way ที่มี amenity=hospital ในไทย
 function buildQuery(lat: number, lng: number, radiusM: number): string {
+  // จำกัด radius สูงสุดที่ 10km เพื่อลด load บน Overpass
+  const r = Math.min(radiusM, 10000);
   return `
-    [out:json][timeout:30];
+    [out:json][timeout:25];
     (
-      node["amenity"="hospital"](around:${radiusM},${lat},${lng});
-      way["amenity"="hospital"](around:${radiusM},${lat},${lng});
+      node["amenity"="hospital"](around:${r},${lat},${lng});
+      way["amenity"="hospital"](around:${r},${lat},${lng});
     );
     out center tags;
   `;
@@ -129,22 +135,37 @@ export async function fetchHospitalsNearby(
 
   const query = buildQuery(lat, lng, radiusM);
 
-  const res = await fetch(OVERPASS_URL, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    `data=${encodeURIComponent(query)}`,
-  });
+  let lastError: Error = new Error('All Overpass mirrors failed');
 
-  if (!res.ok) throw new Error(`Overpass error ${res.status}`);
+  for (const url of OVERPASS_URLS) {
+    try {
+      const res = await fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body:    `data=${encodeURIComponent(query)}`,
+        signal:  AbortSignal.timeout(25000), // 25s timeout per mirror
+      });
 
-  const json = await res.json() as { elements?: any[] };
-  const hospitals: Hospital[] = (json.elements ?? [])
-    .map((el: any) => mapOsmToHospital(el))
-    .filter(Boolean) as Hospital[];
+      if (!res.ok) {
+        lastError = new Error(`Overpass ${url} responded ${res.status}`);
+        continue;
+      }
 
-  cache = { data: hospitals, ts: Date.now() };
+      const json = await res.json() as { elements?: any[] };
+      const hospitals: Hospital[] = (json.elements ?? [])
+        .map((el: any) => mapOsmToHospital(el))
+        .filter(Boolean) as Hospital[];
 
-  return attachDistances(hospitals, lat, lng, radiusM);
+      cache = { data: hospitals, ts: Date.now() };
+      return attachDistances(hospitals, lat, lng, radiusM);
+
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[OSM] mirror ${url} failed:`, err.message);
+    }
+  }
+
+  throw lastError;
 }
 
 // ── Helper: attach distance and filter by radius ──────────────────────────────
