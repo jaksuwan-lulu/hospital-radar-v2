@@ -34,7 +34,7 @@ router.post('/line', async (req, res) => {
         client_secret: process.env.LINE_CHANNEL_SECRET!,
       }),
     });
-    const tokenData = await tokenRes.json();
+    const tokenData = await tokenRes.json() as { access_token?: string; [key: string]: unknown };
     if (!tokenData.access_token) {
       return res.status(401).json({ error: 'LINE token exchange failed', detail: tokenData });
     }
