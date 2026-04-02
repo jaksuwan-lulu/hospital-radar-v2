@@ -1,7 +1,7 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { loginWithLine, setAccessToken } from '../../lib/api';
+import { loginWithLine, setAccessToken } from '../../../lib/api';
 
 // LINE redirects to /auth/callback?code=xxx&state=xxx
 export default function LineCallback() {
