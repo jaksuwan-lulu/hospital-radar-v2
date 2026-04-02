@@ -137,9 +137,9 @@ export async function fetchHospitalsNearby(
 
   if (!res.ok) throw new Error(`Overpass error ${res.status}`);
 
-  const json = await res.json();
+  const json = await res.json() as { elements?: any[] };
   const hospitals: Hospital[] = (json.elements ?? [])
-    .map(mapOsmToHospital)
+    .map((el: any) => mapOsmToHospital(el))
     .filter(Boolean) as Hospital[];
 
   cache = { data: hospitals, ts: Date.now() };

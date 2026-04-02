@@ -41,9 +41,14 @@ router.post('/line', async (req, res) => {
 
     // 2. Get user profile from LINE
     const profileRes = await fetch(LINE_PROFILE_URL, {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      headers: { Authorization: `Bearer ${(tokenData as any).access_token}` },
     });
-    const profile = await profileRes.json();
+    const profileRaw = await profileRes.json();
+    const profile = profileRaw as {
+      userId: string;
+      displayName: string;
+      pictureUrl?: string;
+    };
     if (!profile.userId) {
       return res.status(401).json({ error: 'Could not fetch LINE profile' });
     }
@@ -61,7 +66,7 @@ router.post('/line', async (req, res) => {
       httpOnly: true,
       secure:   process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge:   30 * 24 * 60 * 60 * 1000, // 30 days
+      maxAge:   30 * 24 * 60 * 60 * 1000,
       path:     '/api/auth/refresh',
     });
 
