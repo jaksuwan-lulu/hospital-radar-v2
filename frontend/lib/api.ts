@@ -1,3 +1,5 @@
+import type { Hospital, AuthUser } from '../types/hospital';
+
 const API = process.env.NEXT_PUBLIC_API_URL!;
 
 // access token stored in memory only (not localStorage)
@@ -45,7 +47,7 @@ export async function fetchHospitals(
   const res = await fetch(`${API}/api/hospitals?${q}`); // public — no auth needed
   if (!res.ok) throw new Error('Failed to fetch hospitals');
   const data = await res.json();
-  return data.data as import('./hospital').Hospital[];
+  return data.data as Hospital[];
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -59,7 +61,7 @@ export async function loginWithLine(code: string, redirectUri: string) {
   if (!res.ok) throw new Error('LINE login failed');
   const data = await res.json();
   accessToken = data.access_token;
-  return data.user as import('./hospital').AuthUser;
+  return data.user as AuthUser;
 }
 
 export async function logout() {
