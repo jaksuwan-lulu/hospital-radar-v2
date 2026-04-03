@@ -52,10 +52,11 @@ export async function fetchHospitals(
   lat: number, lng: number,
   radius = 5000,
   type = 'all',
-  status = 'all'
+  status = 'all',
+  scope: 'nearby' | 'all' = 'nearby'
 ) {
-  const q = new URLSearchParams({ lat: String(lat), lng: String(lng), radius: String(radius), type, status });
-  const res = await fetch(`${API}/api/hospitals?${q}`); // public — no auth needed
+  const q = new URLSearchParams({ lat: String(lat), lng: String(lng), radius: String(radius), type, status, scope });
+  const res = await fetch(`${API}/api/hospitals?${q}`);
   if (!res.ok) throw new Error('Failed to fetch hospitals');
   const data = await res.json();
   return data.data as Hospital[];
