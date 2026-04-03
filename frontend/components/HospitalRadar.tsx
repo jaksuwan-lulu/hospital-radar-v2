@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Hospital, UserLocation, FilterType, FilterStatus, AuthUser } from '../types/hospital';
 import { formatDistance } from '../lib/utils';
-import { fetchHospitals, getFavorites, toggleFavoriteAPI, logout } from '../lib/api';
+import { fetchHospitals, getFavorites, toggleFavoriteAPI, logout, getAccessToken } from '../lib/api';
 import LocationPermissionPopup from './LocationPermissionPopup';
 import HospitalDetail from './HospitalDetail';
 import HospitalList from './HospitalList';
@@ -29,7 +29,6 @@ export default function HospitalRadar({ user, onLogout }: Props) {
   const [filteredHospitals, setFiltered]  = useState<Hospital[]>([]);
   const [selectedHospital, setSelected]   = useState<Hospital | null>(null);
   const [showLocationPopup, setShowPopup] = useState(true);
-  // favorites: Set ของ hospital.id ที่ user บันทึกไว้
   const [favorites, setFavorites]         = useState<Set<string>>(new Set());
   const [filterType, setFilterType]       = useState<FilterType>('all');
   const [filterStatus, setFilterStatus]   = useState<FilterStatus>('all');
@@ -40,6 +39,10 @@ export default function HospitalRadar({ user, onLogout }: Props) {
   const [mapReady, setMapReady]           = useState(false);
   const [loading, setLoading]             = useState(false);
   const [error, setError]                 = useState<string | null>(null);
+
+  // isLoggedIn = มี user object หรือมี token ใน sessionStorage
+  // ใช้ทั้งสองเงื่อนไขเพื่อรองรับกรณี user โหลดช้า
+  const isLoggedIn = !!user || !!getAccessToken();
 
   // ── Load Leaflet ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -53,9 +56,9 @@ export default function HospitalRadar({ user, onLogout }: Props) {
 
   // ── Load favorites เมื่อ login ─────────────────────────────────────────────
   useEffect(() => {
-    if (!user) { setFavorites(new Set()); return; }
+    if (!isLoggedIn) { setFavorites(new Set()); return; }
     getFavorites().then(ids => setFavorites(new Set(ids)));
-  }, [user]);
+  }, [isLoggedIn]);
 
   const initMap = (L: any) => {
     if (!mapContainerRef.current || mapRef.current) return;
@@ -125,7 +128,8 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     loadHospitals(userLocation, L, scope, radius);
   }, [filterType, filterStatus, radius, scope]);
 
-  const drawMarkers = (list: Hospital[], _: UserLocation, L: any, currentRadius: number, currentScope: 'nearby' | 'all') => {
+  // ── Draw markers — favorite แสดง ❤️ บน marker ──────────────────────────────
+  const drawMarkers = useCallback((list: Hospital[], _: UserLocation, L: any, currentRadius: number, currentScope: 'nearby' | 'all') => {
     const map = mapRef.current; if (!map || !L) return;
     hospitalMarkersRef.current.forEach(m => { try { map.removeLayer(m); } catch (_) {} });
     hospitalMarkersRef.current.clear();
@@ -133,15 +137,17 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     list.forEach(h => {
       const isOpen    = h.status === 'open';
       const isGov     = h.type === 'government';
+      const isFav     = favorites.has(h.id);
       const dotColor  = isOpen ? '#00ff88' : h.status === 'unknown' ? '#ffd32a' : '#ff4757';
       const dotBorder = isGov ? '#0099ff' : '#ffd32a';
 
       const icon = L.divIcon({
         className: 'hospital-marker-icon',
-        html: `<div style="position:relative;width:28px;height:28px;">
+        html: `<div style="position:relative;width:32px;height:32px;">
           <div style="width:14px;height:14px;background:${dotColor};border:2px solid ${dotBorder};border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);box-shadow:0 0 8px ${dotColor}99;"></div>
+          ${isFav ? `<div style="position:absolute;top:-4px;right:-4px;font-size:10px;line-height:1;">❤️</div>` : ''}
         </div>`,
-        iconSize: [28, 28], iconAnchor: [14, 14],
+        iconSize: [32, 32], iconAnchor: [16, 16],
       });
 
       const typeBadge   = isGov ? `<span style="color:#60a5fa;font-size:10px;">🏛 รัฐบาล</span>` : `<span style="color:#f59e0b;font-size:10px;">🏥 เอกชน</span>`;
@@ -152,7 +158,7 @@ export default function HospitalRadar({ user, onLogout }: Props) {
       const marker = L.marker([h.lat, h.lng], { icon }).addTo(map);
       marker.bindTooltip(
         `<div style="background:#161b22;border:1px solid rgba(255,255,255,0.15);border-radius:10px;padding:8px 10px;min-width:160px;font-family:'Sarabun',sans-serif;">
-          <div style="font-weight:600;font-size:13px;color:white;margin-bottom:4px;">${h.name_th}</div>
+          <div style="font-weight:600;font-size:13px;color:white;margin-bottom:4px;">${isFav ? '❤️ ' : ''}${h.name_th}</div>
           <div style="display:flex;gap:8px;align-items:center;">${typeBadge}<span style="color:${statusColor};font-size:10px;">● ${statusLabel}</span></div>
           ${distTxt}
         </div>`,
@@ -161,7 +167,14 @@ export default function HospitalRadar({ user, onLogout }: Props) {
       marker.on('click', () => setSelected(h));
       hospitalMarkersRef.current.set(h.id, marker);
     });
-  };
+  }, [favorites]);
+
+  // re-draw markers เมื่อ favorites เปลี่ยน
+  useEffect(() => {
+    if (!userLocation || !mapReady || hospitals.length === 0) return;
+    const L = leafletRef.current; if (!L) return;
+    drawMarkers(hospitals, userLocation, L, radius, scope);
+  }, [favorites]);
 
   // ── Filter + เรียง favorites ขึ้นก่อน ─────────────────────────────────────
   useEffect(() => {
@@ -189,31 +202,31 @@ export default function HospitalRadar({ user, onLogout }: Props) {
   }, []);
 
   // ── Favorites ────────────────────────────────────────────────────────────────
-  // optimistic update → ถ้า API fail → rollback ด้วยค่าเดิมก่อน toggle
   const handleToggleFavorite = useCallback(async (id: string) => {
     const wasIn = favorites.has(id);
 
-    // optimistic
+    // optimistic update ทันที
     setFavorites(prev => {
       const next = new Set(prev);
       wasIn ? next.delete(id) : next.add(id);
       return next;
     });
 
-    if (user) {
+    // sync API เฉพาะตอน login (ตรวจทั้ง user object และ token)
+    if (isLoggedIn) {
       try {
         await toggleFavoriteAPI(id);
-      } catch {
-        // rollback — คืนค่าเดิม
+      } catch (err) {
+        console.error('[favorite]', err);
+        // rollback ถ้า API ล้มเหลว
         setFavorites(prev => {
           const next = new Set(prev);
-          wasIn ? next.add(id) : next.delete(id); // ย้อนกลับ
+          wasIn ? next.add(id) : next.delete(id);
           return next;
         });
       }
     }
-    // ถ้าไม่ login → แค่ toggle UI ชั่วคราว (ไม่ persist)
-  }, [user, favorites]);
+  }, [isLoggedIn, favorites]);
 
   const handleLogout = async () => { await logout(); onLogout(); };
 
@@ -266,7 +279,6 @@ export default function HospitalRadar({ user, onLogout }: Props) {
 
       {showLocationPopup && <LocationPermissionPopup onAllow={handleAllowLocation} onDeny={() => setShowPopup(false)} />}
 
-      {/* FilterPanel (burger sidebar) */}
       <FilterPanel
         filterType={filterType} filterStatus={filterStatus}
         onTypeChange={setFilterType} onStatusChange={setFilterStatus}
@@ -277,20 +289,18 @@ export default function HospitalRadar({ user, onLogout }: Props) {
         isOpen={showFilter} onToggle={() => setShowFilter(p => !p)}
       />
 
-      {/* Hospital List */}
       <HospitalList
         hospitals={filteredHospitals}
         onSelect={h => { setSelected(h); setShowList(false); }}
         favorites={favorites} onFavorite={handleToggleFavorite}
         isOpen={showList} onToggle={() => setShowList(p => !p)}
-        isLoggedIn={!!user}
+        isLoggedIn={isLoggedIn}
       />
 
-      {/* Hospital Detail */}
       {selectedHospital && (
         <HospitalDetail
           hospital={selectedHospital} onClose={() => setSelected(null)}
-          onFavorite={handleToggleFavorite} favorites={favorites} isLoggedIn={!!user}
+          onFavorite={handleToggleFavorite} favorites={favorites} isLoggedIn={isLoggedIn}
         />
       )}
 

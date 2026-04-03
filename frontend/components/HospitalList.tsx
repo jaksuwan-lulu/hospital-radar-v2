@@ -16,10 +16,11 @@ interface Props {
 export default function HospitalList({ hospitals, onSelect, favorites, onFavorite, isOpen, onToggle, isLoggedIn }: Props) {
   return (
     <>
-      {/* ปุ่มเปิด list — z-[950] เพื่อให้อยู่เหนือ HospitalDetail backdrop */}
+      {/* ปุ่มเปิด list — safe area bottom สำหรับมือถือ */}
       <button
         onClick={onToggle}
         className="absolute bottom-6 left-4 z-[950] flex items-center gap-2 bg-[#00e5ff] hover:bg-[#00c8e0] active:scale-[0.97] text-[#0d1117] font-bold text-sm px-5 py-3.5 rounded-2xl shadow-lg shadow-[#00e5ff]/20 transition-all"
+        style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
         <span className="text-base leading-none">≡</span>
         รายการ ({hospitals.length})
@@ -27,19 +28,18 @@ export default function HospitalList({ hospitals, onSelect, favorites, onFavorit
 
       {isOpen && (
         <div className="fixed inset-0 z-[960] flex items-end md:items-stretch md:justify-start pointer-events-none">
-          {/* backdrop */}
           <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={onToggle} />
 
-          {/* panel */}
           <div className="
             relative pointer-events-auto
             w-full md:w-80
-            max-h-[75vh] md:max-h-none md:h-full
             bg-[#161b22]
             rounded-t-3xl md:rounded-none
             border-t md:border-t-0 md:border-r border-[rgba(255,255,255,0.08)]
             shadow-2xl flex flex-col
-          ">
+          "
+          style={{ maxHeight: 'calc(75vh - env(safe-area-inset-bottom, 0px))' }}
+          >
             <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mt-3 md:hidden flex-shrink-0" />
 
             <div className="flex items-center gap-2 px-5 py-4 border-b border-[rgba(255,255,255,0.06)] flex-shrink-0">
@@ -67,9 +67,8 @@ export default function HospitalList({ hospitals, onSelect, favorites, onFavorit
                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${statusColor}`} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
+                          {isFav && <span className="text-[#ff4757] text-xs flex-shrink-0">❤️</span>}
                           <p className="text-white text-sm font-medium truncate">{h.name_th}</p>
-                          {/* ดาวสำหรับ favorite */}
-                          {isFav && <span className="text-[#ff4757] text-xs flex-shrink-0">♥</span>}
                         </div>
                         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                           <span className={`flex items-center gap-0.5 text-xs ${h.type === 'government' ? 'text-blue-400' : 'text-amber-400'}`}>
@@ -91,20 +90,18 @@ export default function HospitalList({ hospitals, onSelect, favorites, onFavorit
                         </div>
                       </div>
 
-                      {/* Favorite button */}
-                      {isLoggedIn ? (
-                        // login → กดได้ persist
+                      {/* Favorite — แสดงเฉพาะ login */}
+                      {isLoggedIn && (
                         <button
                           onClick={e => { e.stopPropagation(); onFavorite(h.id); }}
-                          className={`p-2 rounded-lg transition-all active:scale-90 flex-shrink-0 ${
-                            isFav ? 'text-[#ff4757]' : 'text-white/25 hover:text-white/60 md:opacity-0 md:group-hover:opacity-100'
+                          className={`p-2.5 rounded-xl transition-all active:scale-90 flex-shrink-0 ${
+                            isFav
+                              ? 'text-[#ff4757] bg-[#ff4757]/10'
+                              : 'text-white/25 hover:text-white/60 md:opacity-0 md:group-hover:opacity-100'
                           }`}
                         >
-                          <Heart size={14} fill={isFav ? 'currentColor' : 'none'} />
+                          <Heart size={15} fill={isFav ? 'currentColor' : 'none'} />
                         </button>
-                      ) : (
-                        // ยังไม่ login → ซ่อนปุ่ม heart
-                        null
                       )}
                       <ChevronRight size={14} className="text-white/20 group-hover:text-white/50 flex-shrink-0" />
                     </div>
@@ -113,7 +110,6 @@ export default function HospitalList({ hospitals, onSelect, favorites, onFavorit
               )}
             </div>
 
-            {/* hint เมื่อยังไม่ login */}
             {!isLoggedIn && (
               <div className="px-5 py-3 border-t border-[rgba(255,255,255,0.06)] flex-shrink-0">
                 <p className="text-white/30 text-xs text-center">เข้าสู่ระบบด้วย LINE เพื่อบันทึก Favorite</p>
