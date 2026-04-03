@@ -29,12 +29,14 @@ export default function HospitalRadar({ user, onLogout }: Props) {
   const [filteredHospitals, setFiltered]  = useState<Hospital[]>([]);
   const [selectedHospital, setSelected]   = useState<Hospital | null>(null);
   const [showLocationPopup, setShowPopup] = useState(true);
+  // favorites: Set ของ hospital.id ที่ user บันทึกไว้
   const [favorites, setFavorites]         = useState<Set<string>>(new Set());
   const [filterType, setFilterType]       = useState<FilterType>('all');
   const [filterStatus, setFilterStatus]   = useState<FilterStatus>('all');
   const [radius, setRadius]               = useState(5000);
   const [scope, setScope]                 = useState<'nearby' | 'all'>('nearby');
   const [showList, setShowList]           = useState(false);
+  const [showFilter, setShowFilter]       = useState(false);
   const [mapReady, setMapReady]           = useState(false);
   const [loading, setLoading]             = useState(false);
   const [error, setError]                 = useState<string | null>(null);
@@ -49,8 +51,9 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     return () => { if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
   }, []);
 
+  // ── Load favorites เมื่อ login ─────────────────────────────────────────────
   useEffect(() => {
-    if (!user) return;
+    if (!user) { setFavorites(new Set()); return; }
     getFavorites().then(ids => setFavorites(new Set(ids)));
   }, [user]);
 
@@ -68,7 +71,6 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     setMapReady(true);
   };
 
-  // ── Fetch hospitals ─────────────────────────────────────────────────────────
   const loadHospitals = useCallback(async (loc: UserLocation, L: any, currentScope: 'nearby' | 'all', currentRadius: number) => {
     setLoading(true); setError(null);
     try {
@@ -80,7 +82,6 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     } finally { setLoading(false); }
   }, [filterType, filterStatus]);
 
-  // ── When location set ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!userLocation || !mapReady) return;
     const L = leafletRef.current; const map = mapRef.current;
@@ -108,13 +109,9 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     loadHospitals(userLocation, L, scope, radius);
   }, [userLocation, mapReady]);
 
-  // ── Reload when filter/radius/scope changes ─────────────────────────────────
   useEffect(() => {
     if (!userLocation || !mapReady) return;
-    const L = leafletRef.current; if (!L) return;
-
-    // อัพเดท circle
-    const map = mapRef.current;
+    const L = leafletRef.current; const map = mapRef.current; if (!L || !map) return;
     if (circleRef.current) { try { map.removeLayer(circleRef.current); } catch (_) {} }
     if (scope !== 'all') {
       circleRef.current = L.circle([userLocation.lat, userLocation.lng], {
@@ -128,26 +125,21 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     loadHospitals(userLocation, L, scope, radius);
   }, [filterType, filterStatus, radius, scope]);
 
-  // ── Draw markers ─────────────────────────────────────────────────────────────
-  const drawMarkers = (list: Hospital[], userLoc: UserLocation, L: any, currentRadius: number, currentScope: 'nearby' | 'all') => {
+  const drawMarkers = (list: Hospital[], _: UserLocation, L: any, currentRadius: number, currentScope: 'nearby' | 'all') => {
     const map = mapRef.current; if (!map || !L) return;
     hospitalMarkersRef.current.forEach(m => { try { map.removeLayer(m); } catch (_) {} });
     hospitalMarkersRef.current.clear();
 
     list.forEach(h => {
-      const isOpen     = h.status === 'open';
-      const isGov      = h.type === 'government';
-      const inRadius   = currentScope === 'all' ? false : (h.distance ?? 0) <= currentRadius;
-      const dotColor   = isOpen ? '#00ff88' : h.status === 'unknown' ? '#ffd32a' : '#ff4757';
-      const dotBorder  = isGov ? '#0099ff' : '#ffd32a';
-      // โรงพยาบาลนอก radius → opacity 70%
-      const opacity    = inRadius || currentScope === 'all' ? 1 : 0.7;
+      const isOpen    = h.status === 'open';
+      const isGov     = h.type === 'government';
+      const dotColor  = isOpen ? '#00ff88' : h.status === 'unknown' ? '#ffd32a' : '#ff4757';
+      const dotBorder = isGov ? '#0099ff' : '#ffd32a';
 
       const icon = L.divIcon({
         className: 'hospital-marker-icon',
-        html: `<div style="position:relative;width:28px;height:28px;opacity:${opacity};">
+        html: `<div style="position:relative;width:28px;height:28px;">
           <div style="width:14px;height:14px;background:${dotColor};border:2px solid ${dotBorder};border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);box-shadow:0 0 8px ${dotColor}99;"></div>
-          ${inRadius ? `<div style="width:28px;height:28px;background:${dotColor}22;border-radius:50%;position:absolute;top:0;left:0;animation:radar-pulse 2s ease-out infinite;"></div>` : ''}
         </div>`,
         iconSize: [28, 28], iconAnchor: [14, 14],
       });
@@ -166,27 +158,20 @@ export default function HospitalRadar({ user, onLogout }: Props) {
         </div>`,
         { className: 'custom-tooltip', direction: 'top', offset: [0, -8], opacity: 1 }
       );
-
-      const el = marker.getElement();
-      if (el) {
-        el.style.cursor = 'default';
-        el.addEventListener('mouseenter', () => { el.style.cursor = 'pointer'; });
-        el.addEventListener('mouseleave', () => { el.style.cursor = 'default'; });
-      }
       marker.on('click', () => setSelected(h));
       hospitalMarkersRef.current.set(h.id, marker);
     });
   };
 
-  // ── Filter list ─────────────────────────────────────────────────────────────
+  // ── Filter + เรียง favorites ขึ้นก่อน ─────────────────────────────────────
   useEffect(() => {
     let result = [...hospitals];
     if (filterType   !== 'all') result = result.filter(h => h.type   === filterType);
     if (filterStatus !== 'all') result = result.filter(h => h.status === filterStatus);
     result.sort((a, b) => {
-      const aFav = favorites.has(a.id) ? 0 : 1;
-      const bFav = favorites.has(b.id) ? 0 : 1;
-      if (aFav !== bFav) return aFav - bFav;
+      const af = favorites.has(a.id) ? 0 : 1;
+      const bf = favorites.has(b.id) ? 0 : 1;
+      if (af !== bf) return af - bf;
       return (a.distance ?? 99999) - (b.distance ?? 99999);
     });
     setFiltered(result);
@@ -203,13 +188,32 @@ export default function HospitalRadar({ user, onLogout }: Props) {
     );
   }, []);
 
+  // ── Favorites ────────────────────────────────────────────────────────────────
+  // optimistic update → ถ้า API fail → rollback ด้วยค่าเดิมก่อน toggle
   const handleToggleFavorite = useCallback(async (id: string) => {
-    setFavorites(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+    const wasIn = favorites.has(id);
+
+    // optimistic
+    setFavorites(prev => {
+      const next = new Set(prev);
+      wasIn ? next.delete(id) : next.add(id);
+      return next;
+    });
+
     if (user) {
-      try { await toggleFavoriteAPI(id); }
-      catch { setFavorites(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; }); }
+      try {
+        await toggleFavoriteAPI(id);
+      } catch {
+        // rollback — คืนค่าเดิม
+        setFavorites(prev => {
+          const next = new Set(prev);
+          wasIn ? next.add(id) : next.delete(id); // ย้อนกลับ
+          return next;
+        });
+      }
     }
-  }, [user]);
+    // ถ้าไม่ login → แค่ toggle UI ชั่วคราว (ไม่ persist)
+  }, [user, favorites]);
 
   const handleLogout = async () => { await logout(); onLogout(); };
 
@@ -221,8 +225,9 @@ export default function HospitalRadar({ user, onLogout }: Props) {
         .custom-tooltip::before{display:none!important;}
         .leaflet-tooltip{background:transparent;border:none;box-shadow:none;padding:0;}
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
-        @keyframes radar-pulse{0%{transform:scale(0.5);opacity:1}100%{transform:scale(1.8);opacity:0}}
         .animate-blink{animation:blink 2s ease-in-out infinite;}
+        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;}
+        input[type=range]::-moz-range-thumb{border:none;background:transparent;}
       `}</style>
 
       {/* Header */}
@@ -242,8 +247,10 @@ export default function HospitalRadar({ user, onLogout }: Props) {
         </div>
         <div className="pointer-events-auto flex items-center gap-2">
           {userLocation && (
-            <button onClick={() => mapRef.current?.setView([userLocation.lat, userLocation.lng], scope === 'all' ? 6 : 13, { animate: true })}
-              className="p-2.5 bg-[#161b22]/90 backdrop-blur border border-white/10 rounded-xl hover:border-[#00e5ff]/40 hover:text-[#00e5ff] text-white/60 transition-all">
+            <button
+              onClick={() => mapRef.current?.setView([userLocation.lat, userLocation.lng], scope === 'all' ? 6 : 13, { animate: true })}
+              className="p-2.5 bg-[#161b22]/90 backdrop-blur border border-white/10 rounded-xl hover:border-[#00e5ff]/40 hover:text-[#00e5ff] text-white/60 transition-all"
+            >
               <Locate size={16} />
             </button>
           )}
@@ -259,6 +266,7 @@ export default function HospitalRadar({ user, onLogout }: Props) {
 
       {showLocationPopup && <LocationPermissionPopup onAllow={handleAllowLocation} onDeny={() => setShowPopup(false)} />}
 
+      {/* FilterPanel (burger sidebar) */}
       <FilterPanel
         filterType={filterType} filterStatus={filterStatus}
         onTypeChange={setFilterType} onStatusChange={setFilterStatus}
@@ -266,8 +274,10 @@ export default function HospitalRadar({ user, onLogout }: Props) {
         radius={radius} onRadiusChange={setRadius}
         scope={scope} onScopeChange={setScope}
         error={error}
+        isOpen={showFilter} onToggle={() => setShowFilter(p => !p)}
       />
 
+      {/* Hospital List */}
       <HospitalList
         hospitals={filteredHospitals}
         onSelect={h => { setSelected(h); setShowList(false); }}
@@ -276,6 +286,7 @@ export default function HospitalRadar({ user, onLogout }: Props) {
         isLoggedIn={!!user}
       />
 
+      {/* Hospital Detail */}
       {selectedHospital && (
         <HospitalDetail
           hospital={selectedHospital} onClose={() => setSelected(null)}

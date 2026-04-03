@@ -3,8 +3,8 @@ import { Hospital } from '../types';
 // ── Cache ─────────────────────────────────────────────────────────────────────
 let nearbyCache: { data: Hospital[]; ts: number; lat: number; lng: number } | null = null;
 let thailandCache: { data: Hospital[]; ts: number } | null = null;
-const NEARBY_TTL  = 60 * 60 * 1000;       // 1 ชั่วโมง
-const THAILAND_TTL = 6 * 60 * 60 * 1000;  // 6 ชั่วโมง
+const NEARBY_TTL   = 60 * 60 * 1000;
+const THAILAND_TTL = 6 * 60 * 60 * 1000;
 
 // ── Haversine ─────────────────────────────────────────────────────────────────
 function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -17,7 +17,7 @@ function haversine(lat1: number, lng1: number, lat2: number, lng2: number): numb
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ── Smart status guess when no opening_hours ──────────────────────────────────
+// ── Smart status guess ────────────────────────────────────────────────────────
 export function guessStatus(name: string, nameTh: string, isGov: boolean, emergency: boolean): 'open' | 'closed' | 'unknown' {
   const combined = (name + nameTh).toLowerCase();
   const is24h = /(?:bumrungrad|samitivej|สมิติเวช|บำรุงราษฎร์|เวชธานี|mission|มิชชั่น|พระราม9|เปาโล|bangkok\s*hospital|โรงพยาบาลกรุงเทพ)/i.test(combined);
@@ -65,10 +65,10 @@ export function parseOpeningHours(oh: string | undefined): 'open' | 'closed' | '
 
 // ── Map Nominatim item → Hospital ─────────────────────────────────────────────
 function mapItem(item: any, userLat: number, userLng: number): Hospital {
-  const tags  = item.extratags ?? {};
+  const tags   = item.extratags ?? {};
   const nameTh = tags['name:th'] || item.name || 'โรงพยาบาล';
   const nameEn = tags['name:en'] || item.name || nameTh;
-  const isGov  = /(?:โรงพยาบาล(?:รัฐ|ศิริราช|รามา|จุฬา|วชิระ|ตำรวจ|พระมงกุฎ|เลิดสิน|วชิรพยาบาล)|general\s*hospital|regional|district|community)/i
+  const isGov  = /(?:โรงพยาบาล(?:รัฐ|ศิริราช|รามา|จุฬา|วชิระ|ตำรวจ|พระมงกุฎ|เลิดสิน|วชิรพยาบาล|ราชวิถี|พระนั่งเกล้า|นพรัตน)|general\s*hospital|regional|district|community|สถาบัน|ศูนย์การแพทย์(?!วิชัยยุทธ)|โรงพยาบาลส่งเสริม)/i
     .test(nameEn + nameTh + (tags.operator ?? ''));
   const emergency = tags.emergency === 'yes';
   const oh        = tags.opening_hours as string | undefined;
@@ -92,6 +92,7 @@ function mapItem(item: any, userLat: number, userLng: number): Hospital {
 }
 
 // ── Nominatim search ──────────────────────────────────────────────────────────
+// Nominatim max limit = 50 per request — ต้องแบ่ง bbox เพื่อให้ครอบคลุม
 async function nominatimSearch(viewbox: string, limit = 50): Promise<any[]> {
   const url = `https://nominatim.openstreetmap.org/search?` +
     `amenity=hospital&format=jsonv2&limit=${limit}&bounded=1&viewbox=${viewbox}&addressdetails=1&extratags=1`;
@@ -101,6 +102,37 @@ async function nominatimSearch(viewbox: string, limit = 50): Promise<any[]> {
   });
   if (!res.ok) throw new Error(`Nominatim ${res.status}`);
   return res.json() as Promise<any[]>;
+}
+
+// แบ่ง bbox ใหญ่เป็น grid เพื่อดึงข้อมูลได้มากกว่า limit=50
+async function nominatimSearchGrid(
+  minLng: number, minLat: number, maxLng: number, maxLat: number,
+  cols = 2, rows = 2
+): Promise<any[]> {
+  const cellW = (maxLng - minLng) / cols;
+  const cellH = (maxLat - minLat) / rows;
+  const cells: string[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const w = minLng + c * cellW;
+      const s = minLat + r * cellH;
+      const e = w + cellW;
+      const n = s + cellH;
+      cells.push(`${w},${s},${e},${n}`);
+    }
+  }
+  const results = await Promise.allSettled(cells.map(bb => nominatimSearch(bb, 50)));
+  const seen = new Set<number>();
+  const all: any[] = [];
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue;
+    for (const item of r.value) {
+      if (seen.has(item.osm_id)) continue;
+      seen.add(item.osm_id);
+      all.push(item);
+    }
+  }
+  return all;
 }
 
 // ── Nearby (radius-based) ─────────────────────────────────────────────────────
@@ -114,45 +146,32 @@ export async function fetchHospitalsNearby(lat: number, lng: number, radiusM: nu
         .sort((a, b) => a.distance! - b.distance!);
     }
   }
-  const deg  = (radiusM / 111000) * 1.5;
-  const bbox = `${lng - deg},${lat - deg},${lng + deg},${lat + deg}`;
-  const items = await nominatimSearch(bbox, 50);
+  // ใช้ deg * 2 (ไม่ * 1.5) เพื่อให้ bbox ครอบคลุมกว่าเดิม
+  // แบ่ง 2x2 grid เพื่อเลี่ยง limit 50 ของ Nominatim
+  const deg = (radiusM / 111000) * 2;
+  const items = await nominatimSearchGrid(lng - deg, lat - deg, lng + deg, lat + deg, 2, 2);
   const hospitals = items.map(i => mapItem(i, lat, lng)).filter(h => !isNaN(h.lat) && !isNaN(h.lng));
   nearbyCache = { data: hospitals, ts: Date.now(), lat, lng };
   return hospitals.filter(h => h.distance! <= radiusM).sort((a, b) => a.distance! - b.distance!);
 }
 
 // ── All Thailand ──────────────────────────────────────────────────────────────
-// ดึงทั่วประเทศโดยแบ่ง bbox เป็น 4 ส่วน
 export async function fetchAllThailand(userLat: number, userLng: number): Promise<Hospital[]> {
   if (thailandCache && Date.now() - thailandCache.ts < THAILAND_TTL) {
     return thailandCache.data
       .map(h => ({ ...h, distance: Math.round(haversine(userLat, userLng, h.lat, h.lng)) }))
       .sort((a, b) => a.distance! - b.distance!);
   }
-
-  // Thailand bbox แบ่งเป็น 4 quadrant เพื่อให้ได้ผลมากขึ้น
-  const quadrants = [
-    '97.5,5.5,102.5,15.0',   // ใต้ + ตะวันตก
-    '102.5,5.5,105.7,15.0',  // ใต้ + ตะวันออก
-    '97.5,15.0,102.5,20.5',  // เหนือ + ตะวันตก
-    '102.5,15.0,105.7,20.5', // เหนือ + ตะวันออก
-  ];
-
-  const results = await Promise.allSettled(quadrants.map(bb => nominatimSearch(bb, 50)));
-
+  // 4x4 grid ทั่วไทย = 16 requests → ~800 โรงพยาบาล
+  const items = await nominatimSearchGrid(97.5, 5.5, 105.7, 20.5, 4, 4);
   const seen = new Set<number>();
   const all: Hospital[] = [];
-  for (const r of results) {
-    if (r.status !== 'fulfilled') continue;
-    for (const item of r.value) {
-      if (seen.has(item.osm_id)) continue;
-      seen.add(item.osm_id);
-      const h = mapItem(item, userLat, userLng);
-      if (!isNaN(h.lat) && !isNaN(h.lng)) all.push(h);
-    }
+  for (const item of items) {
+    if (seen.has(item.osm_id)) continue;
+    seen.add(item.osm_id);
+    const h = mapItem(item, userLat, userLng);
+    if (!isNaN(h.lat) && !isNaN(h.lng)) all.push(h);
   }
-
   thailandCache = { data: all, ts: Date.now() };
   return all.sort((a, b) => a.distance! - b.distance!);
 }
@@ -162,6 +181,6 @@ export function refreshStatuses(): void {
     ...h,
     status: h.opening_hours ? parseOpeningHours(h.opening_hours) : guessStatus(h.name, h.name_th, h.type === 'government', h.emergency),
   });
-  if (nearbyCache)  nearbyCache.data  = nearbyCache.data.map(refresh);
+  if (nearbyCache)   nearbyCache.data   = nearbyCache.data.map(refresh);
   if (thailandCache) thailandCache.data = thailandCache.data.map(refresh);
 }
